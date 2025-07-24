@@ -53,20 +53,5 @@ public class GpuTester : MonoBehaviour {
         }
 
         resultBuffer.Release();
-        
-        if (dictionary.storedValues != null)
-        {
-            var storedCount = dictionary.storedValues.count;
-
-            var bufferArray = new GPUKeyValue<TestStruct>[storedCount];
-            dictionary.storedValues.GetData(bufferArray);
-
-            for (int i = 0; i < storedCount; i++) {
-                Debug.Log($"storedValues[{i}] = key: {bufferArray[i].key}, value: {bufferArray[i].value.a}, {bufferArray[i].value.b}");
-            }
-        }
-        else {
-            Debug.LogWarning("storedValues buffer is null or was released.");
-        }
     }
 }

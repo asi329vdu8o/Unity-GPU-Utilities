@@ -1,71 +1,70 @@
 using System;
-using System.Linq;
 using UnityEngine;
-
-public struct GPUKeyValue<TValue> where TValue : unmanaged {
-    public int key;
-    public TValue value;
-}
 
 public class GPUDictionary<T> where T : unmanaged {
     
+    #region Public Properties
+    
+    public int StoredElementCount { get; private set;}
+    public int TableSize { get; private set;}
+    public int TotalCollisions { get; private set;}
+    public int MaxCollisionsInOneKey { get; private set;}
+    public bool StoreCpuCopy{ get; private set;}
+    
+    #endregion
+    
+    #region Private Fields
+    
     private ComputeBuffer indexMap;
-    public ComputeBuffer storedValues;
-
-    private int storedElementCount;
-    private int tableSize;
-
-    public int totalCollisions;
-    public int maxCollisionsInOneKey;
-
-    public bool storeCPUside = true;
-
+    private ComputeBuffer storedValues;
     private int byteSizeOfElement;
-    
-    private const string valueMapName = "_valueMap";
-    private const string indexDataBufferName = "_indexDataBuffer";
-    private const string tableSizeName = "_tableSize";
-    private const string customElementByteSizeName = "_customElementByteSize";
-    
     private uint[] hashedKeyToIndex;
     private GPUKeyValue<T>[] valueMap;
     private string dictionaryName;
-
     
-    ~GPUDictionary() {
-        Debug.Log("Releasing Dictionary");
-        Release();
-    }
+    #endregion
+    
+    #region Constant Values
+    
+    private const string ValueMapName = "_valueMap";
+    private const string IndexDataBufferName = "_indexDataBuffer";
+    private const string TableSizeName = "_tableSize";
+    private const string CustomElementByteSizeName = "_customElementByteSize";
+    
+    #endregion
+    
+    #region Public Methods
     
     public void Release() {
         indexMap?.Release();
         storedValues?.Release();
 
-        maxCollisionsInOneKey = 0;
-        totalCollisions = 0;
-        tableSize = 0;
-        storedElementCount = 0;
+        MaxCollisionsInOneKey = 0;
+        TotalCollisions = 0;
+        TableSize = 0;
+        StoredElementCount = 0;
         
         indexMap = null;
         storedValues = null;
     }
     
-    public unsafe void CreateDictionary(int[] keys, T[] values, int tableSize, string dictionaryName) {
+    public unsafe void CreateDictionary(int[] keys, T[] values, int tableSize, string dictionaryName, bool storeCPUside = false) {
         Release();
 
         if (keys.Length != values.Length) {
-            throw (new System.Exception("keys.Length != values.Length"));
+            throw (new Exception("keys.Length != values.Length"));
         }
-        
+
+        this.StoreCpuCopy = storeCPUside;
         this.dictionaryName = dictionaryName;
-        this.tableSize = tableSize;
-        this.storedElementCount = keys.Length;
+        this.TableSize = tableSize;
+        this.StoredElementCount = keys.Length;
         this.byteSizeOfElement = sizeof(T);
         
         indexMap = new ComputeBuffer(tableSize, sizeof(uint));
         storedValues = new ComputeBuffer(keys.Length, sizeof(T) + sizeof(int));
         
-        (uint hashedKey, int key, T value)[] orderedHashedKeys = new (uint hashedKey, int key, T value)[storedElementCount];
+        (uint hashedKey, int key, T value)[] orderedHashedKeys = new (uint hashedKey, int key, T value)[StoredElementCount];
         for (int i = 0; i < keys.Length; i++) {
             orderedHashedKeys[i].hashedKey = IndexHash(keys[i]);
             orderedHashedKeys[i].key = keys[i];
@@ -78,22 +77,22 @@ public class GPUDictionary<T> where T : unmanaged {
             hashedKeyToIndex[i] = uint.MaxValue;
         }
 
-        for (int i = 0; i < storedElementCount; i++) {
+        for (int i = 0; i < StoredElementCount; i++) {
             if (hashedKeyToIndex[orderedHashedKeys[i].hashedKey] == uint.MaxValue)
                 hashedKeyToIndex[orderedHashedKeys[i].hashedKey] = BitPackLengthAndStartingIndex((uint)i, 1);
             else {
-                totalCollisions++;
+                TotalCollisions++;
                 BitPackPlusOneLength(ref hashedKeyToIndex[orderedHashedKeys[i].hashedKey]);
                 uint collisionsHere = (hashedKeyToIndex[orderedHashedKeys[i].hashedKey] >> 24) - 1;
-                if (collisionsHere > maxCollisionsInOneKey) maxCollisionsInOneKey = (int)collisionsHere;
+                if (collisionsHere > MaxCollisionsInOneKey) MaxCollisionsInOneKey = (int)collisionsHere;
             }
         }
         indexMap.SetData(hashedKeyToIndex);
         
         valueMap = new GPUKeyValue<T>[orderedHashedKeys.Length];
-        for (int i = 0; i < storedElementCount; i++) {
-            valueMap[i].key = orderedHashedKeys[i].key;
-            valueMap[i].value = orderedHashedKeys[i].value;
+        for (int i = 0; i < StoredElementCount; i++) {
+            valueMap[i].Key = orderedHashedKeys[i].key;
+            valueMap[i].Value = orderedHashedKeys[i].value;
         }
         storedValues.SetData(valueMap);
 
@@ -102,11 +101,32 @@ public class GPUDictionary<T> where T : unmanaged {
             storedValues = null;
         }
     }
+    
+    public void AddToMaterial(Material material) {
+        if (material == null) throw new ArgumentNullException();
+        
+        material.SetBuffer(dictionaryName + ValueMapName, storedValues);
+        material.SetBuffer(dictionaryName + IndexDataBufferName, indexMap);
+        material.SetInt(dictionaryName + TableSizeName, TableSize);
+        material.SetInt(dictionaryName + CustomElementByteSizeName, byteSizeOfElement);
+    }
 
+    public void AddToShader(ComputeShader shader, int kernelIndex) {
+        if (shader != null) {
+            shader.SetBuffer(kernelIndex, dictionaryName + ValueMapName, storedValues);
+            shader.SetBuffer(kernelIndex, dictionaryName + IndexDataBufferName, indexMap);
+            shader.SetInt(dictionaryName + TableSizeName, TableSize);
+            shader.SetInt(dictionaryName + CustomElementByteSizeName, byteSizeOfElement);
+        }
+        else {
+            throw new NullReferenceException();
+        }
+    }
+    
     //NOT UPDATED
     public bool TryGetValue(int key, out T value) {
         value = default(T);
-        if (!storeCPUside) {
+        if (!StoreCpuCopy) {
             Debug.LogError("CPU copy is not active.");
             return false;
         }
@@ -120,7 +140,7 @@ public class GPUDictionary<T> where T : unmanaged {
         uint startingIndex = hashedKeyToIndex[hash] - (length << 24);
 
         if (length == 1) {
-            if (valueMap[startingIndex].key == key)
+            if (valueMap[startingIndex].Key == key)
                 return true;
         }
         else {
@@ -129,7 +149,11 @@ public class GPUDictionary<T> where T : unmanaged {
 
         return false;
     }
-
+    
+    #endregion
+    
+    #region Private Methods
+    
     private bool BinarySearch(int key, uint starting, uint length, ref T value) {
         uint min = starting;
         uint max = starting + length - 1;
@@ -137,18 +161,19 @@ public class GPUDictionary<T> where T : unmanaged {
         while (min != max) {
             uint index = min + (max - min) / 2;
             
-            if (valueMap[index].key < key) {
+            if (valueMap[index].Key < key) {
                 min = index + 1;
-            }else if (valueMap[index].key > key) {
+            }else if (valueMap[index].Key > key) {
                 max = index;
             }
             else {
-                value = valueMap[index].value;
+                value = valueMap[index].Value;
                 return true;
             }
         }
         return false;
     }
+    
     private uint BitPackLengthAndStartingIndex(uint index, uint length) {
         uint output = 0;
         output += length << 24;
@@ -159,29 +184,20 @@ public class GPUDictionary<T> where T : unmanaged {
     private void BitPackPlusOneLength(ref uint currentValue) {
         currentValue += 1 << 24;
     }
-   
-    public void AddToMaterial(Material material) {
-        if (material == null) throw new System.ArgumentNullException();
-        
-        material.SetBuffer(dictionaryName + valueMapName, storedValues);
-        material.SetBuffer(dictionaryName + indexDataBufferName, indexMap);
-        material.SetInt(dictionaryName + tableSizeName, tableSize);
-        material.SetInt(dictionaryName + customElementByteSizeName, byteSizeOfElement);
-    }
-
-    public void AddToShader(ComputeShader shader, int kernelIndex) {
-        if (shader != null) {
-            shader.SetBuffer(kernelIndex, dictionaryName + valueMapName, storedValues);
-            shader.SetBuffer(kernelIndex, dictionaryName + indexDataBufferName, indexMap);
-            shader.SetInt(dictionaryName + tableSizeName, tableSize);
-            shader.SetInt(dictionaryName + customElementByteSizeName, byteSizeOfElement);
-        }
-        else {
-            throw new NullReferenceException();
-        }
-    }
+    
     private uint IndexHash(int key) {
-        return (uint)key  * 10 % (uint)tableSize;
+        return (uint)key  * 10 % (uint)TableSize;
     }
+    
+    #endregion
+    
+    ~GPUDictionary() {
+        Release();
+    }
+}
+
+internal struct GPUKeyValue<TValue> where TValue : unmanaged {
+    internal int Key;
+    internal TValue Value;
 }
   
