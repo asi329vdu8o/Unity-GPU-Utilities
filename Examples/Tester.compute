@@ -1,0 +1,34 @@
+
+//#pragma target 5.0
+#pragma kernel CSMain
+
+
+struct TestStruct
+{
+    int a;
+    float b;
+    float2 mec;
+};
+
+RWStructuredBuffer<TestStruct> Result;
+int count;
+
+#include "Assets\Package\Unity-GPU-Utilities\HLSL\DictionaryDefine.hlsl"        ///Step 1. Include dictionary
+DICTIONARY(test, TestStruct)                                                    ///Step 2. Declare dictionary with name 
+                                                                                ///        of dictionary (here "test") and name of value struct
+
+[numthreads(8,1,1)]
+void CSMain (uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= count)return;
+    TestStruct test;
+    if ( test_GetValue(id.x, test))                                              ///Step 3. Use name_GetValue(key, out value) to try get a value
+    {
+        Result[id.x] = test;
+        return;
+    }
+    //didn't find key, returned uninitialised value struct
+    test.a = -1;
+    test.b = -1;
+    Result[id.x] = test;
+}
